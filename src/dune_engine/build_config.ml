@@ -27,9 +27,9 @@ module Gen_rules = struct
     ;;
 
     let create
-      ?(build_dir_only_sub_dirs = empty.build_dir_only_sub_dirs)
-      ?(directory_targets = empty.directory_targets)
-      rules
+          ?(build_dir_only_sub_dirs = empty.build_dir_only_sub_dirs)
+          ?(directory_targets = empty.directory_targets)
+          rules
       =
       { build_dir_only_sub_dirs; directory_targets; rules }
     ;;
@@ -75,7 +75,8 @@ type t =
   ; cache_config : Dune_cache.Config.t
   ; cache_debug_flags : Cache_debug_flags.t
   ; implicit_default_alias : Path.Build.t -> unit Action_builder.t option Memo.t
-  ; execution_parameters : dir:Path.Build.t -> Execution_parameters.t Memo.t
+  ; execution_parameters :
+      Context_name.t -> dir:Path.Build.t -> Execution_parameters.t Memo.t
   ; source_tree : (module Source_tree)
   ; shared_cache : (module Dune_cache.Shared.S)
   ; write_error_summary : Build_system_error.Set.t -> unit Fiber.t
@@ -85,18 +86,18 @@ let t : t Fdecl.t = Fdecl.create Dyn.opaque
 let get () = Fdecl.get t
 
 let set
-  ~stats
-  ~contexts
-  ~promote_source
-  ~cache_config
-  ~cache_debug_flags
-  ~sandboxing_preference
-  ~rule_generator
-  ~implicit_default_alias
-  ~execution_parameters
-  ~source_tree
-  ~shared_cache
-  ~write_error_summary
+      ~stats
+      ~contexts
+      ~promote_source
+      ~cache_config
+      ~cache_debug_flags
+      ~sandboxing_preference
+      ~rule_generator
+      ~implicit_default_alias
+      ~execution_parameters
+      ~source_tree
+      ~shared_cache
+      ~write_error_summary
   =
   let contexts =
     Memo.lazy_ ~name:"Build_config.set" (fun () ->

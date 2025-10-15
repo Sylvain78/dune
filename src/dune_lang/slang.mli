@@ -1,5 +1,4 @@
-open! Stdune
-open Dune_sexp
+open Import
 
 (** Slang (string-language) is a DSL for computing lists of strings. *)
 type t =
@@ -33,12 +32,15 @@ and form =
        if none of the arguments evaluate to true *)
   | Blang of blang (** convert a boolean returned by a blang expression into a string *)
 
+(** Tests for syntactic equality of a pair of slang expressions *)
+val equal : t -> t -> bool
+
+val remove_locs : t -> t
 val decode : t Decoder.t
 val encode : t Encoder.t
-val decode_blang : blang Decoder.t
-val encode_blang : blang Encoder.t
 val to_dyn : t -> Dyn.t
 val loc : t -> Loc.t
+val map_loc : f:(Loc.t -> Loc.t) -> t -> t
 val concat : ?loc:Loc.t -> t list -> t
 val when_ : ?loc:Loc.t -> blang -> t -> t
 val if_ : ?loc:Loc.t -> blang -> then_:t -> else_:t -> t
@@ -57,3 +59,18 @@ val bool : ?loc:Loc.t -> bool -> t
 val simplify : t -> t
 
 val simplify_blang : blang -> blang
+
+module Blang : sig
+  type t = blang
+
+  (** Tests for syntactic equality of a pair of blang expressions *)
+  val equal : t -> t -> bool
+
+  val to_dyn : t -> Dyn.t
+  val remove_locs : t -> t
+  val map_loc : f:(Loc.t -> Loc.t) -> t -> t
+  val true_ : t
+  val false_ : t
+  val decode : t Decoder.t
+  val encode : t Encoder.t
+end

@@ -17,16 +17,16 @@ include struct
   open Dune_engine
   module Build_config = Build_config
   module Diff_promotion = Diff_promotion
+  module Build_outcome = Scheduler.Run.Build_outcome
 end
 
 include struct
   open Decl
-  module Build_outcome = Build_outcome
   module Status = Status
 end
 
 module Run = struct
-  module Registry = Dune_rpc_private.Registry
+  module Registry = Dune_rpc.Registry
 
   module Server = Dune_rpc_server.Make (struct
       include Csexp_rpc.Session
@@ -71,34 +71,34 @@ module Run = struct
       let* () = Fiber.Ivar.fill t.server_ivar server in
       Fiber.fork_and_join_unit
         (fun () ->
-          let* sessions = Csexp_rpc.Server.serve server in
-          let () =
-            with_registry
-            @@ fun () ->
-            let (`Caller_should_write { Registry.File.path; contents }) =
-              let registry_config = Registry.Config.create (Lazy.force Dune_util.xdg) in
-              let dune =
-                let pid = Unix.getpid () in
-                let where =
-                  match t.where with
-                  | `Ip (host, port) -> `Ip (host, port)
-                  | `Unix a ->
-                    `Unix
-                      (if Filename.is_relative a
-                       then Filename.concat (Sys.getcwd ()) a
-                       else a)
-                in
-                Registry.Dune.create ~where ~root:t.root ~pid
-              in
-              Registry.Config.register registry_config dune
-            in
-            let (_ : Fpath.mkdir_p_result) = Fpath.mkdir_p (Filename.dirname path) in
-            Io.String_path.write_file path contents;
-            cleanup_registry := Some path;
-            at_exit run_cleanup_registry
-          in
-          let* () = Server.serve sessions t.stats t.handler in
-          Fiber.Pool.close t.pool)
+           let* sessions = Csexp_rpc.Server.serve server in
+           let () =
+             with_registry
+             @@ fun () ->
+             let (`Caller_should_write { Registry.File.path; contents }) =
+               let registry_config = Registry.Config.create (Lazy.force Dune_util.xdg) in
+               let dune =
+                 let pid = Unix.getpid () in
+                 let where =
+                   match t.where with
+                   | `Ip (host, port) -> `Ip (host, port)
+                   | `Unix a ->
+                     `Unix
+                       (if Filename.is_relative a
+                        then Filename.concat (Sys.getcwd ()) a
+                        else a)
+                 in
+                 Registry.Dune.create ~where ~root:t.root ~pid
+               in
+               Registry.Config.register registry_config dune
+             in
+             let (_ : Fpath.mkdir_p_result) = Fpath.mkdir_p (Filename.dirname path) in
+             Io.String_path.write_file path contents;
+             cleanup_registry := Some path;
+             at_exit run_cleanup_registry
+           in
+           let* () = Server.serve sessions t.stats t.handler in
+           Fiber.Pool.close t.pool)
         (fun () -> Fiber.Pool.run t.pool)
     in
     Fiber.finalize (with_print_errors run) ~finally:(fun () ->
@@ -107,7 +107,14 @@ module Run = struct
   ;;
 end
 
-type 'a pending_build_action = Build of 'a list * Build_outcome.t Fiber.Ivar.t
+type 'build_arg pending_action_kind =
+  | Build of 'build_arg list
+  | Runtest of string list
+
+type 'build_arg pending_action =
+  { kind : 'build_arg pending_action_kind
+  ; outcome : Dune_engine.Scheduler.Run.Build_outcome.t Fiber.Ivar.t
+  }
 
 module Client = Stdune.Unit
 
@@ -188,11 +195,10 @@ end = struct
   ;;
 end
 
-type 'a t =
+type 'build_arg t =
   { config : Run.t
-  ; pending_build_jobs : ('a list * Build_outcome.t Fiber.Ivar.t) Job_queue.t
-  ; parse_build : string -> 'a
-  ; watch_mode_config : Watch_mode_config.t
+  ; pending_jobs : 'build_arg pending_action Job_queue.t
+  ; parse_build_arg : string -> 'build_arg
   ; mutable clients : Clients.t
   }
 
@@ -208,7 +214,17 @@ let stop (t : _ t) =
   | Some server -> Csexp_rpc.Server.stop server
 ;;
 
-let handler (t : _ t Fdecl.t) handle : 'a Dune_rpc_server.Handler.t =
+let get_current_diagnostic_errors () =
+  Fiber.Svar.read Build_system.errors
+  |> Build_system_error.Set.current
+  |> Build_system_error.Id.Map.values
+  |> List.filter_map ~f:(fun error ->
+    match Build_system_error.description error with
+    | `Exn _ -> None
+    | `Diagnostic compound_user_error -> Some compound_user_error)
+;;
+
+let handler (t : _ t Fdecl.t) handle : 'build_arg Dune_rpc_server.Handler.t =
   let on_init session (_ : Initialize.Request.t) =
     let t = Fdecl.get t in
     let client = () in
@@ -220,9 +236,7 @@ let handler (t : _ t Fdecl.t) handle : 'a Dune_rpc_server.Handler.t =
     t.clients <- Clients.remove_session t.clients session;
     Fiber.return ()
   in
-  let rpc =
-    Handler.create ~on_terminate ~on_init ~version:Dune_rpc_private.Version.latest ()
-  in
+  let rpc = Handler.create ~on_terminate ~on_init ~version:Dune_rpc.Version.latest () in
   let () =
     let module Error = Build_system_error in
     let diff ~last ~(now : Error.Set.t) =
@@ -318,35 +332,54 @@ let handler (t : _ t Fdecl.t) handle : 'a Dune_rpc_server.Handler.t =
     Handler.declare_notification rpc Procedures.Server_side.log
   in
   let () = Handler.implement_request rpc Procedures.Public.ping (fun _ -> Fiber.return) in
-  let () =
-    let build _session targets =
+  let implement_request_pending_action decl ~f =
+    let handler _session input =
       let server = Fdecl.get t in
-      match server.watch_mode_config with
-      | No -> assert false
-      | Yes Eager ->
-        let error =
-          Dune_rpc.Response.Error.create
-            ~kind:Invalid_request
-            ~message:
-              "the rpc server is running with eager watch mode using --watch. to run \
-               builds through an rpc client, start the server using --passive-watch-mode"
-            ()
-        in
-        raise (Dune_rpc.Response.Error.E error)
-      | Yes Passive ->
-        let ivar = Fiber.Ivar.create () in
-        let targets = List.map targets ~f:server.parse_build in
-        let* () = Job_queue.write server.pending_build_jobs (targets, ivar) in
-        Fiber.Ivar.read ivar
+      let outcome = Fiber.Ivar.create () in
+      let* () = Job_queue.write server.pending_jobs { kind = f input; outcome } in
+      let+ build_outcome = Fiber.Ivar.read outcome in
+      match (build_outcome : Build_outcome.t) with
+      | Success -> Dune_rpc.Build_outcome_with_diagnostics.Success
+      | Failure -> Failure (get_current_diagnostic_errors ())
     in
-    Handler.implement_request rpc Decl.build build
+    Handler.implement_request rpc decl handler
+  in
+  let () =
+    implement_request_pending_action Decl.build ~f:(fun targets ->
+      let server = Fdecl.get t in
+      let targets = List.map targets ~f:server.parse_build_arg in
+      Build targets)
+  in
+  let () =
+    implement_request_pending_action Procedures.Public.runtest ~f:(fun paths ->
+      Runtest paths)
+  in
+  let () =
+    let f _ () =
+      let server = Fdecl.get t in
+      let outcome = Fiber.Ivar.create () in
+      let target =
+        Dune_lang.Dep_conf.Alias_rec (Dune_lang.String_with_vars.make_text Loc.none "fmt")
+      in
+      let* () =
+        Job_queue.write server.pending_jobs { kind = Build [ target ]; outcome }
+      in
+      let+ build_outcome = Fiber.Ivar.read outcome in
+      match build_outcome with
+      (* A 'successful' formatting means there is nothing to promote. *)
+      | Success -> ()
+      | Failure ->
+        Promote.Diff_promotion.promote_files_registered_in_last_run
+          Dune_rpc.Files_to_promote.All
+    in
+    Handler.implement_request rpc Procedures.Public.format f
   in
   let () =
     let rec cancel_pending_jobs () =
-      match Job_queue.pop_internal (Fdecl.get t).pending_build_jobs with
+      match Job_queue.pop_internal (Fdecl.get t).pending_jobs with
       | None -> Fiber.return ()
-      | Some (_, job) ->
-        let* () = Fiber.Ivar.fill job Build_outcome.Failure in
+      | Some { kind = _; outcome } ->
+        let* () = Fiber.Ivar.fill outcome Build_outcome.Failure in
         cancel_pending_jobs ()
     in
     let shutdown _ () =
@@ -389,6 +422,13 @@ let handler (t : _ t Fdecl.t) handle : 'a Dune_rpc_server.Handler.t =
     Handler.implement_request rpc Procedures.Public.diagnostics f
   in
   let () =
+    let f _ files =
+      Promote.Diff_promotion.promote_files_registered_in_last_run files;
+      Fiber.return Dune_rpc.Build_outcome_with_diagnostics.Success
+    in
+    Handler.implement_request rpc Procedures.Public.promote_many f
+  in
+  let () =
     let f _ path =
       let files = For_handlers.source_path_of_string path in
       Promote.Diff_promotion.promote_files_registered_in_last_run
@@ -405,9 +445,9 @@ let handler (t : _ t Fdecl.t) handle : 'a Dune_rpc_server.Handler.t =
   rpc
 ;;
 
-let create ~lock_timeout ~registry ~root ~watch_mode_config ~handle stats ~parse_build =
+let create ~lock_timeout ~registry ~root ~handle stats ~parse_build_arg =
   let t = Fdecl.create Dyn.opaque in
-  let pending_build_jobs = Job_queue.create () in
+  let pending_jobs = Job_queue.create () in
   let handler = Dune_rpc_server.make (handler t handle) in
   let pool = Fiber.Pool.create () in
   let where = Where.default () in
@@ -443,14 +483,7 @@ let create ~lock_timeout ~registry ~root ~watch_mode_config ~handle stats ~parse
     ; server_ivar = Fiber.Ivar.create ()
     }
   in
-  let res =
-    { config
-    ; pending_build_jobs
-    ; watch_mode_config
-    ; clients = Clients.empty
-    ; parse_build
-    }
-  in
+  let res = { config; pending_jobs; clients = Clients.empty; parse_build_arg } in
   Fdecl.set t res;
   res
 ;;
@@ -460,7 +493,4 @@ let run t =
   Run.run t.config
 ;;
 
-let pending_build_action t =
-  Job_queue.read t.pending_build_jobs
-  |> Fiber.map ~f:(fun (targets, ivar) -> Build (targets, ivar))
-;;
+let pending_action t = Job_queue.read t.pending_jobs

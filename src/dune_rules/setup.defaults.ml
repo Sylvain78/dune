@@ -15,3 +15,5 @@ let prefix : string option = None
 let toolchains = `Enabled
 let pkg_build_progress = `Disabled
 let lock_dev_tool = `Disabled
+let bin_dev_tools = `Disabled
+let portable_lock_dir = `Disabled

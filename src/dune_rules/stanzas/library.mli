@@ -13,7 +13,7 @@ type t =
   ; ppx_runtime_libraries : (Loc.t * Lib_name.t) list
   ; modes : Mode_conf.Lib.Set.t
   ; kind : Lib_kind.t
-      (* TODO: It may be worth remaming [c_library_flags] to
+    (* TODO: It may be worth remaming [c_library_flags] to
          [link_time_flags_for_c_compiler] and [library_flags] to
          [link_time_flags_for_ocaml_compiler], both here and in the Dune
          language, to make it easier to understand the purpose of various
@@ -30,6 +30,7 @@ type t =
   ; dune_version : Dune_lang.Syntax.Version.t
   ; virtual_modules : Ordered_set_lang.Unexpanded.t option
   ; implements : (Loc.t * Lib_name.t) option
+  ; parameters : (Loc.t * Lib_name.t) list
   ; default_implementation : (Loc.t * Lib_name.t) option
   ; private_modules : Ordered_set_lang.Unexpanded.t option
   ; stdlib : Ocaml_stdlib.t option

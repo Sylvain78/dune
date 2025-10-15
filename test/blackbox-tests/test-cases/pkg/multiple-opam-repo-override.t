@@ -1,5 +1,6 @@
 Multiple opam repositories that define the same package:
 
+  $ . ../git-helpers.sh
   $ . ./helpers.sh
 
   $ pkg="packages/foo"
@@ -25,7 +26,8 @@ Multiple opam repositories that define the same package:
   > `
 
   $ cat >dune-workspace <<EOF
-  > (lang dune 3.11)
+  > (lang dune 3.20)
+  > (pkg enabled)
   > (lock_dir
   >  (repositories repo1 repo2))
   > $repos12
@@ -34,8 +36,8 @@ Multiple opam repositories that define the same package:
   $ make_project foo | cat >dune-project
 
   $ runtest () {
-  > dune pkg lock
-  > cat dune.lock/foo.pkg
+  >   dune pkg lock
+  >   cat ${default_lock_dir}/foo.pkg
   > }
 
 Define 1.0.0 in repo1 and 2.0.0 in repo2 for the same package:

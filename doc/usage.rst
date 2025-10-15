@@ -162,6 +162,8 @@ If the previous rule doesn't apply, i.e., no ancestor directory has a
 file named ``dune-workspace``, then the current directory will be used
 as root.
 
+.. _forcing-root:
+
 Forcing the Root (for Scripts)
 ------------------------------
 
@@ -171,6 +173,10 @@ explicitly. This option is intended for scripts to disable the automatic lookup.
 Note that when using the ``--root`` option, targets given on the command line
 will be interpreted relative to the given root, not relative to the current
 directory, as this is normally the case.
+
+Alternatively, you can set the environment variable ``DUNE_ROOT``.
+The ``--root`` option has a higher priority than ``DUNE_ROOT`` environment
+variable.
 
 Interpretation of Targets
 =========================

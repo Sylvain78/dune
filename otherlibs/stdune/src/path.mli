@@ -66,6 +66,8 @@ module Local : sig
   val split_first_component : t -> (Filename.t * t) option
   val explode : t -> Filename.t list
   val descendant : t -> of_:t -> t option
+
+  module Table : Hashtbl.S with type key = t
 end
 
 module External : sig
@@ -316,9 +318,6 @@ val drop_optional_sandbox_root : t -> t
     otherwise fail. *)
 val drop_optional_build_context_src_exn : t -> Source.t
 
-val explode : t -> Filename.t list option
-val explode_exn : t -> Filename.t list
-
 (** The build directory *)
 val build_dir : t
 
@@ -334,23 +333,15 @@ val as_in_build_dir : t -> Build.t option
 val as_in_build_dir_exn : t -> Build.t
 val as_external : t -> External.t option
 
-(** [is_strict_descendant_of_build_dir t = is_in_build_dir t && t <> build_dir] *)
-val is_strict_descendant_of_build_dir : t -> bool
-
 (** Split after the first component if [t] is local *)
 val split_first_component : t -> (Filename.t * t) option
 
 val exists : t -> bool
-
-val readdir_unsorted
-  :  t
-  -> (Filename.t list, Dune_filesystem_stubs.Unix_error.Detailed.t) Result.t
+val readdir_unsorted : t -> (Filename.t list, Unix_error.Detailed.t) Result.t
 
 val readdir_unsorted_with_kinds
   :  t
-  -> ( (Filename.t * Unix.file_kind) list
-       , Dune_filesystem_stubs.Unix_error.Detailed.t )
-       Result.t
+  -> ((Filename.t * Unix.file_kind) list, Unix_error.Detailed.t) Result.t
 
 val is_dir_sep : char -> bool
 
@@ -374,10 +365,6 @@ val build_dir_exists : unit -> bool
 val ensure_build_dir_exists : unit -> unit
 val source : Source.t -> t
 val build : Build.t -> t
-
-(** paths guaranteed to be in the source directory *)
-val in_source : string -> t
-
 val of_local : Local.t -> t
 
 (** Set the workspace root. Can only be called once and the path must be
@@ -394,16 +381,10 @@ end
     of [/a/b] is [./a/b]. *)
 val local_part : t -> Local.t
 
-val stat : t -> (Unix.stats, Dune_filesystem_stubs.Unix_error.Detailed.t) Result.t
+val stat : t -> (Unix.stats, Unix_error.Detailed.t) Result.t
 val stat_exn : t -> Unix.stats
-val lstat : t -> (Unix.stats, Dune_filesystem_stubs.Unix_error.Detailed.t) Result.t
+val lstat : t -> (Unix.stats, Unix_error.Detailed.t) Result.t
 val lstat_exn : t -> Unix.stats
-
-(* it would be nice to call this [Set.of_source_paths], but it's annoying to
-   change the [Set] signature because then we don't comply with [Path_intf.S] *)
-val set_of_source_paths : Source.Set.t -> Set.t
-val set_of_build_paths_list : Build.t list -> Set.t
-val set_of_external_paths : External.Set.t -> Set.t
 
 (** Rename a file. [rename oldpath newpath] renames the file called [oldpath] to
     [newpath], moving it between directories if needed. If [newpath] already
@@ -414,24 +395,17 @@ val rename : t -> t -> unit
     you need to modify existing permissions in a non-trivial way. *)
 val chmod : t -> mode:int -> unit
 
-(** Attempts to resolve a symlink. Returns:
-
-    - [Ok path] with the resolved destination
-    - [Error Not_a_symlink] if the path isn't a symlink
-    - [Error Max_depth_exceeded] if the function reached the maximum symbolic
-      link depth
-    - [Error (Unix_error _)] with the underlying syscall error. *)
-val follow_symlink : t -> (t, Fpath.follow_symlink_error) result
-
 (** [drop_prefix_exn t ~prefix] drops the [prefix] from a path, including any
-    leftover `/` prefix. Raises a [Code_error.t] if the prefix wasn't found. *)
+    leftover directory separator prefix. Raises a [Code_error.t] if the prefix
+    wasn't found. *)
 val drop_prefix_exn : t -> prefix:t -> Local.t
 
 (** [drop_prefix t ~prefix] drops the [prefix] from a path, including any
-    leftover `/` prefix. Returns [None] if the prefix wasn't found. *)
+    leftover directory separator prefix. Returns [None] if the prefix wasn't
+    found. *)
 val drop_prefix : t -> prefix:t -> Local.t option
 
-val make_local_path : Local.t -> t
+val is_broken_symlink : t -> bool
 
 module Expert : sig
   (** Attempt to convert external paths to source/build paths. Don't use this

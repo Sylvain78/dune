@@ -1,22 +1,24 @@
-Test exec --watch with a program that doesn't terminate immediately.
+Test exec --watch with a program that does not terminate immediately.
 
-File created by the program being exec'd. In between each experiment we'll wait
-until the file exists so that dune has enough time to build and run the program
-between each change to its code.
+File created by the program being execed. In between each experiment we will
+wait until the file exists so that dune has enough time to build and run the
+program between each change to its code.
+
   $ export DONE_FLAG=_build/done_flag
 
   $ cat >foo.ml <<EOF
   > let () =
   >   print_endline "0: before";
   >   Touch.touch "$DONE_FLAG";
-  >   Unix.sleep 1000;
+  >   Unix.sleep 1;
   >   print_endline "0: after"
   > EOF
 
+Below, 0: after should *not* be appearing.
+
   $ dune exec --watch ./foo.exe &
-  Success, waiting for filesystem changes...
   0: before
-  Success, waiting for filesystem changes...
+  0: after
   1: before
   1: after
   Success, waiting for filesystem changes...
@@ -41,11 +43,9 @@ Change the program so that it no longer terminates immediately.
   > let () =
   >   print_endline "2: before";
   >   Touch.touch "$DONE_FLAG";
-  >   Unix.sleep 1000;
+  >   Unix.sleep 1;
   >   print_endline "2: after"
   > EOF
 
   $ ../wait-for-file.sh $DONE_FLAG
 
-Prevent the test from leaking the dune process.
-  $ kill $PID

@@ -4,8 +4,7 @@
     Eventually, these are all desugared into [Action.t], which are actions
     executed by the build system. *)
 
-open Stdune
-open Dune_sexp
+open Import
 open Dune_util.Action
 
 module Action_plugin : sig
@@ -66,7 +65,7 @@ end
 
 module Env_update : sig
   module Op : sig
-    type t =
+    type t = OpamParserTypes.env_update_op =
       | Eq
       | PlusEq
       | EqPlus
@@ -124,6 +123,13 @@ type t =
 val encode : t Encoder.t
 val decode_dune_file : t Decoder.t
 val decode_pkg : t Decoder.t
+
+val map
+  :  t
+  -> string_with_vars:(String_with_vars.t -> String_with_vars.t)
+  -> slang:(Slang.t -> Slang.t)
+  -> blang:(Slang.Blang.t -> Slang.Blang.t)
+  -> t
 
 (** Raises User_error on invalid action. *)
 val validate : loc:Loc.t -> t -> unit

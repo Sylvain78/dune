@@ -128,6 +128,7 @@ val public_headers : 'path t -> 'path File_deps.t
     the [Std_exit] module of the stdlib. *)
 val exit_module : _ t -> Module_name.t option
 
+val root_module : _ t -> Module_name.t option
 val instrumentation_backend : _ t -> (Loc.t * Lib_name.t) option
 val plugins : 'path t -> 'path list Mode.Dict.t
 val src_dir : 'path t -> 'path
@@ -139,7 +140,7 @@ val jsoo_runtime : 'path t -> 'path list
 val wasmoo_runtime : 'path t -> 'path list
 val melange_runtime_deps : 'path t -> 'path File_deps.t
 val obj_dir : 'path t -> 'path Obj_dir.t
-val virtual_ : _ t -> Modules.t Source.t option
+val virtual_ : _ t -> bool
 val entry_modules : _ t -> (Module_name.t list, User_message.t) result Source.t
 val main_module_name : _ t -> Main_module_name.t
 val wrapped : _ t -> Wrapped.t Inherited.t option
@@ -148,6 +149,7 @@ val modes : _ t -> Lib_mode.Map.Set.t
 val modules : _ t -> Modules.With_vlib.t option Source.t
 val implements : _ t -> (Loc.t * Lib_name.t) option
 val requires : _ t -> Lib_dep.t list
+val parameters : _ t -> (Loc.t * Lib_name.t) list
 val ppx_runtime_deps : _ t -> (Loc.t * Lib_name.t) list
 val preprocess : _ t -> Preprocess.With_instrumentation.t Preprocess.Per_module.t
 val sub_systems : _ t -> Sub_system_info.t Sub_system_name.Map.t
@@ -164,7 +166,6 @@ val best_src_dir : 'path t -> 'path
 type external_ = Path.t t
 type local = Path.Build.t t
 
-val user_written_deps : _ t -> Lib_dep.t list
 val of_local : local -> external_
 val as_local_exn : external_ -> local
 val set_version : 'a t -> Package_version.t option -> 'a t
@@ -177,14 +178,13 @@ val for_dune_package
   -> foreign_objects:Path.t list
   -> obj_dir:Path.t Obj_dir.t
   -> implements:(Loc.t * Lib_name.t) option
+  -> parameters:(Loc.t * Lib_name.t) list
   -> default_implementation:(Loc.t * Lib_name.t) option
   -> sub_systems:Sub_system_info.t Sub_system_name.Map.t
   -> melange_runtime_deps:Path.t list
   -> public_headers:Path.t list
   -> modules:Modules.With_vlib.t
   -> Path.t t
-
-val map_path : Path.t t -> f:(Path.t -> Path.t) -> Path.t t
 
 type 'a path =
   | Local : Path.Build.t path
@@ -205,6 +205,7 @@ val create
   -> main_module_name:Main_module_name.t
   -> sub_systems:Sub_system_info.t Sub_system_name.Map.t
   -> requires:Lib_dep.t list
+  -> parameters:(Loc.t * Lib_name.t) list
   -> foreign_objects:'a list Source.t
   -> public_headers:'a File_deps.t
   -> plugins:'a list Mode.Dict.t
@@ -219,7 +220,6 @@ val create
   -> enabled:Enabled_status.t Memo.t
   -> virtual_deps:(Loc.t * Lib_name.t) list
   -> dune_version:Dune_lang.Syntax.Version.t option
-  -> virtual_:Modules.t Source.t option
   -> entry_modules:(Module_name.t list, User_message.t) result Source.t
   -> implements:(Loc.t * Lib_name.t) option
   -> default_implementation:(Loc.t * Lib_name.t) option
@@ -230,6 +230,7 @@ val create
   -> exit_module:Module_name.t option
   -> instrumentation_backend:(Loc.t * Lib_name.t) option
   -> melange_runtime_deps:'a File_deps.t
+  -> root_module:Module_name.t option
   -> 'a t
 
 val package : _ t -> Package.Name.t option

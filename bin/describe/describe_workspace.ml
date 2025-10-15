@@ -5,7 +5,7 @@ module Options = struct
   type t =
     { with_deps : bool (* whether to compute direct dependencies between modules *)
     ; with_pps : bool
-    (* whether to include the dependencies to ppx-rewriters (that are
+      (* whether to include the dependencies to ppx-rewriters (that are
        used at compile time) *)
     }
 
@@ -71,18 +71,18 @@ module Descr = struct
   (* Description of the dependencies of a module *)
   module Mod_deps = struct
     type t =
-      { for_intf : Dune_rules.Module_name.t list
-          (* direct module dependencies for the interface *)
-      ; for_impl : Dune_rules.Module_name.t list
-      (* direct module dependencies for the implementation *)
+      { for_intf : Dune_lang.Module_name.t list
+        (* direct module dependencies for the interface *)
+      ; for_impl : Dune_lang.Module_name.t list
+        (* direct module dependencies for the implementation *)
       }
 
     (* Conversion to the [Dyn.t] type *)
     let to_dyn { for_intf; for_impl } =
       let open Dyn in
       record
-        [ "for_intf", list Dune_rules.Module_name.to_dyn for_intf
-        ; "for_impl", list Dune_rules.Module_name.to_dyn for_impl
+        [ "for_intf", list Dune_lang.Module_name.to_dyn for_intf
+        ; "for_impl", list Dune_lang.Module_name.to_dyn for_impl
         ]
     ;;
   end
@@ -90,7 +90,7 @@ module Descr = struct
   (* Description of modules *)
   module Mod = struct
     type t =
-      { name : Dune_rules.Module_name.t (* name of the module *)
+      { name : Dune_lang.Module_name.t (* name of the module *)
       ; impl : Path.t option (* path to the .ml file, if any *)
       ; intf : Path.t option (* path to the .mli file, if any *)
       ; cmt : Path.t option (* path to the .cmt file, if any *)
@@ -114,7 +114,7 @@ module Descr = struct
         | Some module_deps -> [ module_deps ]
       in
       record
-      @@ [ "name", Dune_rules.Module_name.to_dyn name
+      @@ [ "name", Dune_lang.Module_name.to_dyn name
          ; "impl", option dyn_path impl
          ; "intf", option dyn_path intf
          ; "cmt", option dyn_path cmt
@@ -129,7 +129,7 @@ module Descr = struct
     type t =
       { names : string list (* names of the executable *)
       ; requires : Digest.t list
-          (* list of direct dependencies to libraries, identified by their
+        (* list of direct dependencies to libraries, identified by their
              digests *)
       ; modules : Mod.t list (* list of the modules the executable is composed of *)
       ; include_dirs : Path.t list (* list of include directories *)
@@ -157,10 +157,10 @@ module Descr = struct
       ; uid : Digest.t (* digest of the library *)
       ; local : bool (* whether this library is local *)
       ; requires : Digest.t list
-          (* list of direct dependendies to libraries, identified by their
+        (* list of direct dependendies to libraries, identified by their
              digests *)
       ; source_dir : Path.t
-          (* path to the directory that contains the sources of this library *)
+        (* path to the directory that contains the sources of this library *)
       ; modules : Mod.t list (* list of the modules the executable is composed of *)
       ; include_dirs : Path.t list (* list of include directories *)
       }
@@ -336,22 +336,22 @@ module Crawl = struct
   let immediate_deps_of_module ~options ~obj_dir ~modules unit =
     match (options : Options.t) with
     | { with_deps = false; _ } ->
-      Action_builder.return { Ocaml.Ml_kind.Dict.intf = []; impl = [] }
+      Action_builder.return { Root.Ocaml.Ml_kind.Dict.intf = []; impl = [] }
     | { with_deps = true; _ } ->
       let deps ml_kind =
         Dune_rules.Dep_rules.immediate_deps_of unit modules ~obj_dir ~ml_kind
       in
       let open Action_builder.O in
       let+ intf, impl = Action_builder.both (deps Intf) (deps Impl) in
-      { Ocaml.Ml_kind.Dict.intf; impl }
+      { Root.Ocaml.Ml_kind.Dict.intf; impl }
   ;;
 
   (* Builds the description of a module from a module and its object directory *)
   let module_
-    ~obj_dir
-    ~(deps_for_intf : Module.t list)
-    ~(deps_for_impl : Module.t list)
-    (m : Module.t)
+        ~obj_dir
+        ~(deps_for_intf : Module.t list)
+        ~(deps_for_impl : Module.t list)
+        (m : Module.t)
     : Descr.Mod.t
     =
     let source ml_kind = Option.map (Module.source m ~ml_kind) ~f:Module.File.path in
@@ -377,7 +377,7 @@ module Crawl = struct
     |> Modules.fold ~init:(Memo.return []) ~f:(fun m macc ->
       let* acc = macc in
       let deps = deps_of m in
-      let+ { Ocaml.Ml_kind.Dict.intf = deps_for_intf; impl = deps_for_impl }, _ =
+      let+ { Root.Ocaml.Ml_kind.Dict.intf = deps_for_intf; impl = deps_for_impl }, _ =
         Dune_engine.Action_builder.evaluate_and_collect_facts deps
       in
       module_ ~obj_dir ~deps_for_intf ~deps_for_impl m :: acc)
@@ -413,7 +413,8 @@ module Crawl = struct
         in
         Staged.unstage
         @@ Pp_spec.pped_modules_map
-             (Preprocess.Per_module.without_instrumentation exes.buildable.preprocess)
+             (Dune_lang.Preprocess.Per_module.without_instrumentation
+                exes.buildable.preprocess)
              version
       in
       let deps_of module_ =
@@ -481,7 +482,7 @@ module Crawl = struct
             in
             Staged.unstage
             @@ Pp_spec.pped_modules_map
-                 (Preprocess.Per_module.without_instrumentation
+                 (Dune_lang.Preprocess.Per_module.without_instrumentation
                     (Lib_info.preprocess info))
                  version
           in
@@ -542,10 +543,10 @@ module Crawl = struct
 
   (* Builds a workspace description for the provided dune setup and context *)
   let workspace
-    options
-    ({ Dune_rules.Main.contexts = _; scontexts } : Dune_rules.Main.build_system)
-    (context : Context.t)
-    dirs
+        options
+        ({ Dune_rules.Main.contexts = _; scontexts } : Dune_rules.Main.build_system)
+        (context : Context.t)
+        dirs
     : Descr.Workspace.t Memo.t
     =
     let context_name = Context.name context in
@@ -655,7 +656,7 @@ let term : unit Term.t =
     in
     Dune_lang.Decoder.parse parse Univ_map.empty ast
   in
-  Scheduler.go ~common ~config
+  Scheduler.go_with_rpc_server ~common ~config
   @@ fun () ->
   let open Fiber.O in
   let* setup = Import.Main.setup () in

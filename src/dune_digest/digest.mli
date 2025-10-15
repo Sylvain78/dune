@@ -1,8 +1,38 @@
 open Stdune
 
-(** Digests (MD5) *)
+(** Digests (BLAKE3) *)
 
 type t
+
+module Feed : sig
+  type digest := t
+  type hasher
+
+  (** Type for incrementally building up the computation of a hash. A ['a t]
+      can consume a value of type ['a] and incorporate it into a hash value. *)
+  type 'a t = hasher -> 'a -> unit
+
+  (** Consume any value. The result is based on the in-memory representation of
+      the value, so this is unsafe to perform on types who may have different
+      in-memory representation for values which are conceptually equal, such as
+      sets and maps. *)
+  val generic : _ t
+
+  val contramap : 'a t -> f:('b -> 'a) -> 'b t
+  val string : string t
+  val bool : bool t
+  val int : int t
+  val list : 'a t -> 'a list t
+  val option : 'a t -> 'a option t
+  val tuple2 : 'a t -> 'b t -> ('a * 'b) t
+  val tuple3 : 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
+
+  (** Feed a digest into a hasher. *)
+  val digest : digest t
+
+  (** Compute the digest of a value given a feed for the type of that value. *)
+  val compute_digest : 'a t -> 'a -> digest
+end
 
 include Comparable_intf.S with type key := t
 
@@ -24,7 +54,7 @@ val generic : 'a -> t
 module Stats_for_digest : sig
   type t =
     { st_kind : Unix.file_kind
-    ; st_perm : Unix.file_perm
+    ; executable : bool
     }
 
   val of_unix_stats : Unix.stats -> t
@@ -33,7 +63,7 @@ end
 module Path_digest_error : sig
   type nonrec t =
     | Unexpected_kind
-    | Unix_error of Dune_filesystem_stubs.Unix_error.Detailed.t
+    | Unix_error of Unix_error.Detailed.t
     (** A Unix error, e.g., [(ENOENT, _, _)] if the path doesn't exist. *)
 end
 
@@ -60,13 +90,3 @@ val path_with_stats
 (** Digest a file taking the [executable] bit into account. Should not be called
     on a directory. *)
 val file_with_executable_bit : executable:bool -> Path.t -> t
-
-(** Override the implementations of digest computation. Can be used to record
-    the reverse digest map. *)
-val override_impl : file:(string -> t) -> string:(string -> t) -> unit
-
-(** [Direct_impl] does a plain hashing, with no heed to the overrides given by
-    [override_impl]. *)
-module Direct_impl : sig
-  val string : string -> t
-end

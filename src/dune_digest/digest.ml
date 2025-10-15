@@ -1,83 +1,111 @@
 open Stdune
 
-type t = string
+module T = struct
+  type t = Blake3_mini.Digest.t
 
-external md5_fd : Unix.file_descr -> string = "dune_md5_fd"
-
-module D = Stdlib.Digest
-module Set = String.Set
-module Map = String.Map
-module Metrics = Dune_metrics
-
-module type Digest_impl = sig
-  val file : string -> t
-  val string : string -> t
+  let to_string = Blake3_mini.Digest.to_hex
+  let to_dyn s = Dyn.variant "digest" [ String (to_string s) ]
+  let compare x y = Ordering.of_int (Blake3_mini.Digest.compare x y)
 end
 
-module Direct_impl : Digest_impl = struct
-  let file file =
-    (* On Windows, if this function is invoked in a background thread,
+include T
+module C = Comparable.Make (T)
+module Set = C.Set
+module Map = C.Map
+module Metrics = Dune_metrics
+
+let file file =
+  (* On Windows, if this function is invoked in a background thread,
        if can happen that the file is not properly closed.
        [O_SHARE_DELETE] ensures that the main thread can delete it even if it
        is still open. See #8243. *)
-    let fd =
-      match Unix.openfile file [ Unix.O_RDONLY; O_SHARE_DELETE; O_CLOEXEC ] 0 with
-      | fd -> fd
-      | exception Unix.Unix_error (Unix.EACCES, _, _) ->
-        raise (Sys_error (sprintf "%s: Permission denied" file))
-      | exception exn -> reraise exn
-    in
-    Exn.protectx fd ~f:md5_fd ~finally:Unix.close
+  let fd =
+    match Unix.openfile file [ Unix.O_RDONLY; O_SHARE_DELETE; O_CLOEXEC ] 0 with
+    | fd -> fd
+    | exception Unix.Unix_error (Unix.EACCES, _, _) ->
+      raise (Sys_error (sprintf "%s: Permission denied" file))
+    | exception exn -> reraise exn
+  in
+  Exn.protectx fd ~f:Blake3_mini.fd ~finally:Unix.close
+;;
+
+let equal = Blake3_mini.Digest.equal
+let hash = Poly.hash
+let file p = file (Path.to_string p)
+let from_hex s = Blake3_mini.Digest.of_hex s
+
+module Hasher = struct
+  type t = Blake3_mini.t
+
+  let with_singleton =
+    let singleton = lazy (Blake3_mini.create ()) in
+    let in_use = ref false in
+    fun f ->
+      if !in_use
+      then
+        Code_error.raise
+          "[Hasher.with_singleton] called within argument function to \
+           [Hasher.with_singleton], which is not allowed."
+          []
+      else (
+        in_use := true;
+        let hasher = Lazy.force singleton in
+        f hasher;
+        let digest = Blake3_mini.digest hasher in
+        Blake3_mini.reset hasher;
+        in_use := false;
+        digest)
+  ;;
+end
+
+module Feed = struct
+  type hasher = Hasher.t
+  type 'a t = hasher -> 'a -> unit
+
+  let contramap a ~f hasher b = a hasher (f b)
+  let string hasher s = Blake3_mini.feed_string hasher s ~pos:0 ~len:(String.length s)
+  let bool = contramap string ~f:Bool.to_string
+  let int = contramap string ~f:Int.to_string
+
+  (* We use [No_sharing] to avoid generating different digests for inputs that
+       differ only in how they share internal values. Without [No_sharing], if a
+       command line contains duplicate flags, such as multiple occurrences of the
+       flag [-I], then [Marshal.to_string] will produce different digests depending
+       on whether the corresponding strings ["-I"] point to the same memory location
+       or to different memory locations. *)
+  let generic hasher x =
+    contramap string ~f:(fun x -> Marshal.to_string x [ No_sharing ]) hasher x
   ;;
 
-  let string = D.string
+  let list feed_x hasher xs = List.iter xs ~f:(feed_x hasher)
+  let option feed_x hasher option_x = Option.iter option_x ~f:(feed_x hasher)
+
+  let tuple2 feed_a feed_b hasher (a, b) =
+    feed_a hasher a;
+    feed_b hasher b
+  ;;
+
+  let tuple3 feed_a feed_b feed_c hasher (a, b, c) =
+    feed_a hasher a;
+    feed_b hasher b;
+    feed_c hasher c
+  ;;
+
+  let digest hasher digest = contramap string ~f:to_string hasher digest
+  let compute_digest t x = Hasher.with_singleton (fun hasher -> t hasher x)
 end
 
-module Mutable_impl = struct
-  let file_ref = ref Direct_impl.file
-  let string_ref = ref D.string
-  let file f = !file_ref f
-  let string s = !string_ref s
-end
+let string s = Feed.compute_digest Feed.string s
+let to_string_raw s = Blake3_mini.Digest.to_binary s
 
-let override_impl ~file ~string =
-  Mutable_impl.file_ref := file;
-  Mutable_impl.string_ref := string
-;;
-
-module Impl : Digest_impl = Mutable_impl
-
-let hash = Poly.hash
-let equal = String.equal
-let file p = Impl.file (Path.to_string p)
-let compare x y = Ordering.of_int (D.compare x y)
-let to_string = D.to_hex
-let to_dyn s = Dyn.variant "digest" [ String (to_string s) ]
-
-let from_hex s =
-  match D.from_hex s with
-  | s -> Some s
-  | exception Invalid_argument _ -> None
-;;
-
-let string = Impl.string
-let to_string_raw s = s
-
-(* We use [No_sharing] to avoid generating different digests for inputs that
-   differ only in how they share internal values. Without [No_sharing], if a
-   command line contains duplicate flags, such as multiple occurrences of the
-   flag [-I], then [Marshal.to_string] will produce different digests depending
-   on whether the corresponding strings ["-I"] point to the same memory location
-   or to different memory locations. *)
 let generic a =
-  Metrics.Timer.record "generic_digest" ~f:(fun () ->
-    string (Marshal.to_string a [ No_sharing ]))
+  Metrics.Timer.record "generic_digest" ~f:(fun () -> Feed.compute_digest Feed.generic a)
 ;;
 
 let path_with_executable_bit =
   (* We follow the digest scheme used by Jenga. *)
   let string_and_bool ~digest_hex ~bool =
-    Impl.string (digest_hex ^ if bool then "\001" else "\000")
+    string (Blake3_mini.Digest.to_hex digest_hex ^ if bool then "\001" else "\000")
   in
   fun ~executable ~content_digest ->
     string_and_bool ~digest_hex:content_digest ~bool:executable
@@ -91,39 +119,39 @@ let file_with_executable_bit ~executable path =
 module Stats_for_digest = struct
   type t =
     { st_kind : Unix.file_kind
-    ; st_perm : Unix.file_perm
+    ; executable : bool
     }
 
   let of_unix_stats (stats : Unix.stats) =
-    { st_kind = stats.st_kind; st_perm = stats.st_perm }
+    (* Check if any of the +x bits are set, ignore read and write *)
+    let executable = 0o111 land stats.st_perm <> 0 in
+    { st_kind = stats.st_kind; executable }
   ;;
 end
 
 module Path_digest_error = struct
   type nonrec t =
     | Unexpected_kind
-    | Unix_error of Dune_filesystem_stubs.Unix_error.Detailed.t
+    | Unix_error of Unix_error.Detailed.t
 end
 
 exception E of Path_digest_error.t
 
-let directory_digest_version = 2
+let directory_digest_version = 3
 
 let path_with_stats ~allow_dirs path (stats : Stats_for_digest.t) =
   let rec loop path (stats : Stats_for_digest.t) =
     match stats.st_kind with
     | S_LNK ->
-      let executable = Path.Permissions.test Path.Permissions.execute stats.st_perm in
-      Dune_filesystem_stubs.Unix_error.Detailed.catch
+      Unix_error.Detailed.catch
         (fun path ->
-          let contents = Unix.readlink (Path.to_string path) in
-          path_with_executable_bit ~executable ~content_digest:contents)
+           let contents = Path.to_string path |> Unix.readlink |> string in
+           path_with_executable_bit ~executable:stats.executable ~content_digest:contents)
         path
       |> Result.map_error ~f:(fun x -> Path_digest_error.Unix_error x)
     | S_REG ->
-      let executable = Path.Permissions.test Path.Permissions.execute stats.st_perm in
-      Dune_filesystem_stubs.Unix_error.Detailed.catch
-        (file_with_executable_bit ~executable)
+      Unix_error.Detailed.catch
+        (file_with_executable_bit ~executable:stats.executable)
         path
       |> Result.map_error ~f:(fun x -> Path_digest_error.Unix_error x)
     | S_DIR when allow_dirs ->
@@ -150,7 +178,8 @@ let path_with_stats ~allow_dirs path (stats : Stats_for_digest.t) =
             |> List.sort ~compare:(fun (x, _) (y, _) -> String.compare x y)
           with
           | exception E e -> Error e
-          | contents -> Ok (generic (directory_digest_version, contents, stats.st_perm))))
+          | contents ->
+            Ok (generic (directory_digest_version, contents, stats.executable))))
     | S_DIR | S_BLK | S_CHR | S_FIFO | S_SOCK -> Error Unexpected_kind
   in
   match stats.st_kind with
